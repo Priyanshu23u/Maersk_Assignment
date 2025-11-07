@@ -10,4 +10,4 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DATA_PATH = "./data"
 
 # Model config
-MODEL_NAME = "gemini-1.5-pro"
+MODEL_NAME = "gemini-2.0-flash"
