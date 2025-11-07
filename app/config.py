@@ -1,13 +1,12 @@
 import os
 from dotenv import load_dotenv
 
+# Load .env
 load_dotenv()
 
-# Gemini API key
+# Gemini API
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# Paths
-DATA_PATH = "./data"
-
-# Model config
 MODEL_NAME = "gemini-2.0-flash"
+
+# Data path
+DATA_PATH = "./data"
