@@ -16,9 +16,7 @@ class QueryExecutor:
     def run_query(self, sql_query: str):
         try:
             print(f"🧠 Executing SQL:\n{sql_query}")
-            # execute and return a pandas DataFrame
             result = self.conn.execute(sql_query).fetchdf()
             return result
         except Exception as e:
-            # return error string to caller so it can attempt corrections
             return f"❌ Query error: {e}"

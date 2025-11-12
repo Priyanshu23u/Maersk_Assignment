@@ -2,56 +2,87 @@
 import plotly.express as px
 import pandas as pd
 import streamlit as st
+import hashlib
+
+
+def export_pdf_simple(df: pd.DataFrame, filename: str = "analysis_report.pdf"):
+    """Export simple PDF summary of DataFrame using fpdf."""
+    try:
+        from fpdf import FPDF
+    except Exception:
+        return False, "fpdf not installed"
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt="E-Commerce Analysis Report", ln=True, align="C")
+    pdf.ln(4)
+    for col in df.columns[:8]:
+        pdf.cell(0, 6, txt=f"{col}: {', '.join(map(str, df[col].dropna().astype(str).head(3)))}", ln=True)
+    pdf.output(filename)
+    return True, filename
+
 
 def visualize_result(user_query: str, df: pd.DataFrame):
-    """
-    Display the query and an appropriate visualization / result in Streamlit.
-    Handles empty DataFrames, single-value numeric results, and multi-column results.
-    """
-    st.markdown(f"### 💬 **Query:** {user_query}")
+    """Display result tables, charts, and unique download buttons."""
+    if df is None or df.empty:
+        st.warning("⚠️ No data found for this query.")
+        return
 
-    if df is None or (hasattr(df, "empty") and df.empty):
-        st.warning("⚠️ No matching data found for this query.")
-        st.info("However, the assistant may provide an English explanation below.")
-        return None
+    # Generate a unique hash for widget keys
+    unique_key = hashlib.md5(user_query.encode()).hexdigest()[:8]
 
-    # If single cell or single column with a single row numeric result, show it prominently
-    # e.g., SELECT MAX(product_width_cm) ...
-    if df.shape[0] == 1 and df.shape[1] == 1 and pd.api.types.is_numeric_dtype(df.dtypes[0]):
-        val = df.iloc[0, 0]
-        col = df.columns[0]
-        st.success(f"✅ Result: **{col} = {val}**")
-        return "single_value"
+    # --- Display Data Table ---
+    st.dataframe(df.head(100), use_container_width=True)
 
-    # If single column with numbers, show top / histogram / table
-    if df.shape[1] == 1 and pd.api.types.is_numeric_dtype(df.iloc[:,0].dtype):
-        st.dataframe(df.head(50), use_container_width=True)
+    # --- Automatic Chart Suggestion ---
+    try:
+        from google.generativeai import GenerativeModel
+        model = GenerativeModel("gemini-2.0-flash")
+        chart_prompt = f"""
+Based on this query and these columns, suggest the best chart type:
+(bar, line, pie, scatter, histogram, or none)
+Query: {user_query}
+Columns: {list(df.columns)}
+"""
+        chart_type = model.generate_content(chart_prompt).text.lower().strip()
+    except Exception:
+        chart_type = "bar"
+
+    if df.shape[1] >= 2:
+        x, y = df.columns[0], df.columns[1]
         try:
-            fig = px.histogram(df, x=df.columns[0], nbins=30, title=f"Distribution of {df.columns[0]}")
-            st.plotly_chart(fig, use_container_width=True)
+            if "bar" in chart_type:
+                fig = px.bar(df, x=x, y=y, title=f"{y} by {x}")
+            elif "line" in chart_type:
+                fig = px.line(df, x=x, y=y, title=f"{y} trend")
+            elif "pie" in chart_type:
+                fig = px.pie(df, names=x, values=y, title=f"{y} share by {x}")
+            elif "scatter" in chart_type:
+                fig = px.scatter(df, x=x, y=y, title=f"{y} vs {x}")
+            else:
+                fig = None
+            if fig is not None:
+                st.plotly_chart(fig, use_container_width=True, key=f"chart_{unique_key}")
         except Exception:
             pass
-        return "one_column"
 
-    # If two columns and one numeric, show bar chart
-    numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    if df.shape[1] == 2 and len(numeric_cols) >= 1:
-        # assume first non-numeric is x, numeric is y
-        x_col = df.columns[0] if not pd.api.types.is_numeric_dtype(df[df.columns[0]].dtype) else df.columns[1]
-        y_col = numeric_cols[0]
-        st.dataframe(df.head(50), use_container_width=True)
-        try:
-            fig = px.bar(df, x=x_col, y=y_col, title=f"{y_col} by {x_col}")
-            st.plotly_chart(fig, use_container_width=True)
-        except Exception:
-            pass
-        return "two_column"
+    # --- Downloads ---
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "📥 Download CSV",
+        data=csv,
+        file_name=f"analysis_result_{unique_key}.csv",
+        mime="text/csv",
+        key=f"csv_{unique_key}"
+    )
 
-    # For other cases show a table and small guidance
-    st.dataframe(df.head(50), use_container_width=True)
-    numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    if len(numeric_cols) > 0:
-        st.info("📄 Numeric columns detected — results shown in the table above.")
-    else:
-        st.info("ℹ️ This query returned text-based results (e.g., translations or labels).")
-    return "table"
+    ok, file = export_pdf_simple(df, filename=f"analysis_report_{unique_key}.pdf")
+    if ok:
+        with open(file, "rb") as f:
+            st.download_button(
+                "📄 Download PDF",
+                data=f,
+                file_name=file,
+                mime="application/pdf",
+                key=f"pdf_{unique_key}"
+            )

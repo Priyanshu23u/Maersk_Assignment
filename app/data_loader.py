@@ -9,7 +9,6 @@ def load_olist_data(data_path: str):
     """
     print("📦 Loading Olist dataset (full merge with geolocation & dimensions)...")
 
-    # Load CSVs (safe reads)
     def read_csv_safe(p):
         try:
             return pd.read_csv(p)
@@ -27,7 +26,7 @@ def load_olist_data(data_path: str):
     geolocs     = read_csv_safe(os.path.join(data_path, "olist_geolocation_dataset.csv"))
     translation = read_csv_safe(os.path.join(data_path, "product_category_name_translation.csv"))
 
-    # Prepare unique geolocation by zip prefix
+    # Unique geolocations by prefix
     geolocs_unique = geolocs.drop_duplicates(subset=["geolocation_zip_code_prefix"]) if not geolocs.empty else geolocs
 
     # Merge geolocation into customers
@@ -37,7 +36,6 @@ def load_olist_data(data_path: str):
             left_on="customer_zip_code_prefix",
             right_on="geolocation_zip_code_prefix",
             how="left",
-            suffixes=("", "_geo")
         ).rename(columns={
             "geolocation_lat": "customer_lat",
             "geolocation_lng": "customer_lng",
@@ -52,7 +50,6 @@ def load_olist_data(data_path: str):
             left_on="seller_zip_code_prefix",
             right_on="geolocation_zip_code_prefix",
             how="left",
-            suffixes=("", "_geo")
         ).rename(columns={
             "geolocation_lat": "seller_lat",
             "geolocation_lng": "seller_lng",
@@ -60,16 +57,14 @@ def load_olist_data(data_path: str):
             "geolocation_state": "seller_geo_state"
         })
 
-    # Merge product translations (if available)
+    # Merge product translations
     if not products.empty and not translation.empty:
-        # translation expected cols: product_category_name, product_category_name_english
+        # translation expected columns: product_category_name, product_category_name_english
         products = products.merge(translation, on="product_category_name", how="left")
 
-    # Merge main tables
-    # Use left joins on orders as base
+    # Merge in sequence starting from orders
     merged = orders.copy() if not orders.empty else pd.DataFrame()
     if not merged.empty:
-        # Stepwise merges; guard for missing tables
         if not customers.empty:
             merged = merged.merge(customers, on="customer_id", how="left")
         if not items.empty:
@@ -83,7 +78,7 @@ def load_olist_data(data_path: str):
         if not sellers.empty:
             merged = merged.merge(sellers, on="seller_id", how="left")
 
-    # Parse date columns robustly
+    # Parse dates
     date_cols = [
         "order_purchase_timestamp", "order_approved_at",
         "order_delivered_carrier_date", "order_delivered_customer_date",
@@ -94,14 +89,11 @@ def load_olist_data(data_path: str):
         if col in merged.columns:
             merged[col] = pd.to_datetime(merged[col], errors="coerce")
 
-    # Numeric fills for common numeric columns
+    # Numeric fills
     for col in ["price", "freight_value", "payment_value"]:
         if col in merged.columns:
-            try:
-                merged[col] = pd.to_numeric(merged[col], errors="coerce")
-                merged[col].fillna(merged[col].median(skipna=True), inplace=True)
-            except Exception:
-                pass
+            merged[col] = pd.to_numeric(merged[col], errors="coerce")
+            merged[col].fillna(merged[col].median(skipna=True), inplace=True)
 
     # Feature engineering
     if "order_purchase_timestamp" in merged.columns:
@@ -116,47 +108,39 @@ def load_olist_data(data_path: str):
     else:
         merged["delivery_days"] = None
 
-    # total_order_value: prefer payment_value if available, else price+freight
+    # total_order_value: prefer payment_value if present
     if "payment_value" in merged.columns:
         merged["total_order_value"] = merged["payment_value"].fillna(0)
     else:
         merged["total_order_value"] = 0
     if "price" in merged.columns and "freight_value" in merged.columns:
-        merged["total_order_value"] = merged["total_order_value"].where(merged["total_order_value"] > 0, merged["price"].fillna(0) + merged["freight_value"].fillna(0))
+        merged["total_order_value"] = merged["total_order_value"].where(merged["total_order_value"] > 0,
+                                                                         merged["price"].fillna(0) + merged["freight_value"].fillna(0))
 
-    # Ensure product dimension columns exist and are numeric
+    # Ensure product dimension columns exist and numeric
     dim_cols = ["product_weight_g", "product_length_cm", "product_height_cm", "product_width_cm"]
     for col in dim_cols:
         if col in merged.columns:
             merged[col] = pd.to_numeric(merged[col], errors="coerce")
         else:
-            # create column with NaNs if not present so schema consistent
             merged[col] = pd.NA
 
-    # Keep a broad but reasonable set of columns so queries work
+    # Keep a broad set of useful columns (intersection)
     keep_cols = [
-        # order
-        "order_id", "order_status", "order_year", "order_month", "order_purchase_timestamp", "shipping_limit_date",
-        # customer
+        "order_id", "order_status", "order_year", "order_month", "order_purchase_timestamp",
         "customer_id", "customer_unique_id", "customer_city", "customer_state", "customer_zip_code_prefix",
         "customer_lat", "customer_lng", "customer_geo_city", "customer_geo_state",
-        # seller
         "seller_id", "seller_city", "seller_state", "seller_zip_code_prefix",
         "seller_lat", "seller_lng", "seller_geo_city", "seller_geo_state",
-        # product / item
         "order_item_id", "product_id", "product_category_name", "product_category_name_english",
         "product_name_lenght", "product_description_lenght", "product_photos_qty",
         "product_weight_g", "product_length_cm", "product_height_cm", "product_width_cm",
-        # financial
-        "price", "freight_value", "payment_type", "payment_installments", "payment_value", "total_order_value",
-        # review
+        "price", "freight_value", "payment_type", "payment_installments", "payment_value",
+        "total_order_value",
         "review_id", "review_score", "review_creation_date", "review_answer_timestamp",
         "review_comment_title", "review_comment_message",
-        # computed
         "delivery_days"
     ]
-
-    # Keep only the intersection to avoid KeyError
     keep_existing = [c for c in keep_cols if c in merged.columns]
     merged = merged[keep_existing].copy()
 
